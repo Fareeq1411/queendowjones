@@ -1,0 +1,95 @@
+import numpy as np
+import pandas as pd
+import joblib
+import matplotlib.pyplot as plt
+import os
+
+# File paths
+test_data_url = '/Users/fareeq1411/Desktop/ITProject/QueenDowJones.nosync/US3060_test.csv'
+
+# Hyperparameters
+timesteps = 4
+price_change_threshold = 0.03
+
+# Load model and scaler
+rf_model = joblib.load('random_forest_model.pkl')
+scaler = joblib.load('scaler.pkl')
+
+# Load and preprocess test data
+dataset_test = pd.read_csv(test_data_url, skipinitialspace=True)
+dataset_test.columns = [col.strip() for col in dataset_test.columns]
+
+if 'open' in dataset_test.columns:
+    test_set1 = dataset_test[['open', 'close', 'high', 'low', 'volume', 'RSI_6', 'MACD', 'MACD_Signal', 'Upper_BB', 'Lower_BB']].dropna().values
+else:
+    raise KeyError("The 'open' column is not present in the test dataset")
+
+test_set1_scaled = scaler.transform(test_set1)
+inputs_scaled = scaler.transform(test_set1[:timesteps])
+
+# Prediction Loop
+predictions, real_decisions, real_prices_unscaled = [], [], []
+print(f"{'Time Step':<10}{'Real Price':<15}{'Model Prediction':<20}{'Real Decision':<15}")
+print("=" * 90)
+
+for idx in range(timesteps -1, len(test_set1_scaled)):
+
+    X_test = inputs_scaled[-timesteps:].flatten().reshape(1, -1)
+    action = rf_model.predict(X_test)[0]
+    action_name = {0: 'Buy', 1: 'Hold', 2: 'Sell'}[action]
+    action_probabilities = rf_model.predict_proba(X_test)[0]
+    predictions.append(action_name)
+    
+    # Print the prediction and certainty
+    certainty = action_probabilities[action]
+    print(f"Prediction: {action_name} (Certainty: {certainty * 100:.2f}%)")
+
+    current_real_price_unscaled = test_set1[idx, 0]
+    real_prices_unscaled.append(current_real_price_unscaled)
+
+    if idx < len(test_set1_scaled) - 1:
+        next_real_price_unscaled = test_set1[idx + 1, 0]
+        percentage_change = ((next_real_price_unscaled - current_real_price_unscaled) /
+                             current_real_price_unscaled) * 100
+
+        if percentage_change < -price_change_threshold:
+            real_decision = 'Sell'
+        elif percentage_change > price_change_threshold:
+            real_decision = 'Buy'
+        else:
+            real_decision = 'Hold'
+
+        real_decisions.append(real_decision)
+        print(f"{idx:<10}{current_real_price_unscaled:<15.2f}{action_name:<20}{real_decision:<15}")
+
+    else:
+        real_decisions.append('N/A')
+
+    inputs_scaled = np.append(inputs_scaled, test_set1_scaled[idx].reshape(1, -1), axis=0)
+
+# Calculate accuracy only for Buy and Sell
+correct_predictions = sum(1 for real, pred in zip(real_decisions[1:], predictions[1:]) 
+                           if (real in ['Buy', 'Sell'] and pred == real))
+total_relevant_predictions = sum(1 for real in real_decisions[1:] if real in ['Buy', 'Sell'])
+
+average_accuracy = (correct_predictions / total_relevant_predictions * 100) if total_relevant_predictions > 0 else 0
+print(f"\nAverage Accuracy (Buy/Sell only): {average_accuracy:.2f}%")
+
+# # Plot Real Prices with Predictions
+# plt.figure(figsize=(7, 14))
+# plt.plot(real_prices_unscaled, color='blue', label='Real Prices', linewidth=1.5)
+# for idx, action in enumerate(predictions):
+#     plt.text(idx, real_prices_unscaled[idx], action, 
+#              fontsize=9, ha='center', 
+#              color='green' if action == 'Buy' else 'red' if action == 'Sell' else 'black')
+
+# plt.title('Real Prices with Model Predictions')
+# plt.xlabel('Time Steps')
+# plt.ylabel('Price')
+# plt.legend(['Real Prices'], loc="upper left")
+# plt.grid(True)
+# plt.tight_layout()
+# plt.show()
+
+# # Alert when complete
+# os.system('say "Prediction completed!"')
